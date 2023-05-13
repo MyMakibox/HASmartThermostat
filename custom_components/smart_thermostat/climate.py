@@ -401,10 +401,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             # If we have a previously saved temperature
             if old_state.attributes.get(ATTR_TEMPERATURE) is None:
                 if self._target_temp is None:
-                    if self._ac_mode:
-                        self._target_temp = self.max_temp
-                    else:
-                        self._target_temp = self.min_temp
+                    self._target_temp = self.max_temp if self._ac_mode else self.min_temp
                 _LOGGER.warning("%s: No setpoint available in old state, falling back to %s",
                                 self.entity_id, self._target_temp)
             else:
@@ -416,7 +413,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             if old_state.attributes.get(ATTR_PRESET_MODE) is not None:
                 self._attr_preset_mode = old_state.attributes.get(ATTR_PRESET_MODE)
             if isinstance(old_state.attributes.get('pid_i'), (float, int)) and \
-                    self._pid_controller is not None:
+                        self._pid_controller is not None:
                 self._i = float(old_state.attributes.get('pid_i'))
                 self._pid_controller.integral = self._i
             if not self._hvac_mode and old_state.state:
@@ -446,16 +443,13 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
                 self._ke = float(old_state.attributes.get('Ke'))
                 self._pid_controller.set_pid_param(ke=self._ke)
             if old_state.attributes.get('pid_mode') is not None and \
-                    self._pid_controller is not None:
+                        self._pid_controller is not None:
                 self._pid_controller.mode = old_state.attributes.get('pid_mode')
 
         else:
             # No previous state, try and restore defaults
             if self._target_temp is None:
-                if self._ac_mode:
-                    self._target_temp = self.max_temp
-                else:
-                    self._target_temp = self.min_temp
+                self._target_temp = self.max_temp if self._ac_mode else self.min_temp
             _LOGGER.warning("%s: No setpoint to restore, setting to %s", self.entity_id,
                             self._target_temp)
 
@@ -515,9 +509,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             return HVACAction.OFF
         if not self._is_device_active:
             return HVACAction.IDLE
-        if self._ac_mode:
-            return HVACAction.COOLING
-        return HVACAction.HEATING
+        return HVACAction.COOLING if self._ac_mode else HVACAction.HEATING
 
     @property
     def target_temperature(self):
@@ -533,9 +525,11 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
     def preset_modes(self):
         """Return a list of available preset modes."""
         preset_modes = [PRESET_NONE]
-        for mode, preset_mode_temp in self._preset_modes_temp.items():
-            if preset_mode_temp is not None:
-                preset_modes.append(mode)
+        preset_modes.extend(
+            mode
+            for mode, preset_mode_temp in self._preset_modes_temp.items()
+            if preset_mode_temp is not None
+        )
         return preset_modes
 
     @property
@@ -567,11 +561,11 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
     @property
     def presets(self):
         """Return a dict of available preset and temperatures."""
-        presets = {}
-        for mode, preset_mode_temp in self._preset_modes_temp.items():
-            if preset_mode_temp is not None:
-                presets.update({mode: preset_mode_temp})
-        return presets
+        return {
+            mode: preset_mode_temp
+            for mode, preset_mode_temp in self._preset_modes_temp.items()
+            if preset_mode_temp is not None
+        }
 
     @property
     def _min_on_cycle_duration(self):
@@ -642,15 +636,15 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             "pid_i": 0 if self._autotune != "none" else self.pid_control_i,
         }
         if self._debug:
-            device_state_attributes.update({
+            device_state_attributes |= {
                 "pid_p": 0 if self._autotune != "none" else self.pid_control_p,
                 "pid_d": 0 if self._autotune != "none" else self.pid_control_d,
                 "pid_e": 0 if self._autotune != "none" else self.pid_control_e,
                 "pid_dt": 0 if self._autotune != "none" else self._dt,
-            })
+            }
 
         if self._autotune != "none":
-            device_state_attributes.update({
+            device_state_attributes |= {
                 "autotune_status": self._pid_autotune.state,
                 "autotune_sample_time": self._pid_autotune.sample_time,
                 "autotune_tuning_rule": self._autotune,
@@ -658,7 +652,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
                 "autotune_peak_count": self._pid_autotune.peak_count,
                 "autotune_buffer_full": round(self._pid_autotune.buffer_full, 2),
                 "autotune_buffer_length": self._pid_autotune.buffer_length,
-            })
+            }
         return device_state_attributes
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -701,10 +695,11 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is None:
             return
-        if self._current_temp is not None and temperature > self._current_temp:
-            self._force_on = True
-        elif self._current_temp is not None and temperature < self._current_temp:
-            self._force_off = True
+        if self._current_temp is not None:
+            if temperature > self._current_temp:
+                self._force_on = True
+            elif temperature < self._current_temp:
+                self._force_off = True
         if temperature in self._preset_temp_modes and self._preset_sync_mode == 'sync':
             await self.async_set_preset_mode(self._preset_temp_modes[temperature])
         else:
@@ -733,7 +728,10 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
     async def async_set_pid_mode(self, **kwargs):
         """Set PID parameters."""
         mode = kwargs.get('mode', None)
-        if str(mode).upper() in ['AUTO', 'OFF'] and self._pid_controller is not None:
+        if (
+            str(mode).upper() in {'AUTO', 'OFF'}
+            and self._pid_controller is not None
+        ):
             self._pid_controller.mode = str(mode).upper()
         await self._async_control_heating(calc_pid=True)
 
@@ -792,20 +790,12 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
     @property
     def min_temp(self):
         """Return the minimum temperature."""
-        if self._min_temp:
-            return self._min_temp
-
-        # get default temp from super class
-        return super().min_temp
+        return self._min_temp if self._min_temp else super().min_temp
 
     @property
     def max_temp(self):
         """Return the maximum temperature."""
-        if self._max_temp:
-            return self._max_temp
-
-        # Get default temp from super class
-        return super().max_temp
+        return self._max_temp if self._max_temp else super().max_temp
 
     async def _async_sensor_changed(self, entity_id, old_state, new_state):
         """Handle temperature changes."""
@@ -906,10 +896,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
         if time.time() - self._last_heat_cycle_time >= self._min_off_cycle_duration.seconds:
             data = {ATTR_ENTITY_ID: self._heater_entity_id}
             _LOGGER.info("%s: Turning ON %s", self.entity_id, self._heater_entity_id)
-            if self._heater_polarity_invert:
-                service = SERVICE_TURN_OFF
-            else:
-                service = SERVICE_TURN_ON
+            service = SERVICE_TURN_OFF if self._heater_polarity_invert else SERVICE_TURN_ON
             await self.hass.services.async_call(HA_DOMAIN, service, data)
             self._last_heat_cycle_time = time.time()
         else:
@@ -921,10 +908,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
         if time.time() - self._last_heat_cycle_time >= self._min_on_cycle_duration.seconds or force:
             data = {ATTR_ENTITY_ID: self._heater_entity_id}
             _LOGGER.info("%s: Turning OFF %s", self.entity_id, self._heater_entity_id)
-            if self._heater_polarity_invert:
-                service = SERVICE_TURN_ON
-            else:
-                service = SERVICE_TURN_OFF
+            service = SERVICE_TURN_ON if self._heater_polarity_invert else SERVICE_TURN_OFF
             await self.hass.services.async_call(HA_DOMAIN, service, data)
             self._last_heat_cycle_time = time.time()
         else:
@@ -944,7 +928,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
         elif preset_mode == PRESET_NONE and self.preset_mode != PRESET_NONE:
             # self._is_away = False
             self._target_temp = self._saved_target_temp
-        elif preset_mode == PRESET_NONE and self.preset_mode == PRESET_NONE:
+        elif preset_mode == PRESET_NONE:
             return None
         else:
             self._target_temp = self.presets[preset_mode]
@@ -952,7 +936,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
         if self._boost_pid_off and self._attr_preset_mode == PRESET_BOOST:
             # Force PID OFF if requested and boost mode is active
             await self.async_set_pid_mode(mode='off')
-        elif self._boost_pid_off and self._attr_preset_mode != PRESET_BOOST:
+        elif self._boost_pid_off:
             # Force PID Auto if managed by boost_pid_off and not in boost mode
             await self.async_set_pid_mode(mode='auto')
         else:
